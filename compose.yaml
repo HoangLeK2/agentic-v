@@ -1,0 +1,111 @@
+services:
+  agentos-db:
+    image: agnohq/pgvector:18
+    container_name: agentos-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    environment:
+      POSTGRES_USER: ${DB_USER:-ai}
+      POSTGRES_PASSWORD: ${DB_PASS:-ai}
+      POSTGRES_DB: ${DB_DATABASE:-ai}
+    networks:
+      - agentos
+
+  agentos-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentos-api
+    image: ${IMAGE_NAME:-agentos}:${IMAGE_TAG:-latest}
+    # --reload-dir limits the watcher to dirs that contain runtime code.
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      --reload-dir agents --reload-dir app --reload-dir db --reload-dir evals --reload-dir workflows
+    restart: unless-stopped
+    stop_grace_period: 60s
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    env_file:
+      - path: ../agno/.env
+        required: true
+      - path: .env
+        required: false
+    environment:
+      RUNTIME_ENV: dev
+      AGNO_DEBUG: "True"
+      WAIT_FOR_DB: "True"
+      AGENTOS_URL: http://127.0.0.1:8000
+      OPENAI_BASE_URL: http://host.docker.internal:20128/v1
+      WORKSPACE_EXECUTOR_MCP_URL: ${WORKSPACE_EXECUTOR_MCP_URL:-}
+      WORKSPACE_EXECUTOR_TOKEN: ${WORKSPACE_EXECUTOR_TOKEN:-}
+      DB_HOST: agentos-db
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-ai}
+      DB_PASS: ${DB_PASS:-ai}
+      DB_DATABASE: ${DB_DATABASE:-ai}
+    depends_on:
+      - agentos-db
+    networks:
+      - agentos
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  workspace-executor:
+    build:
+      context: .
+      dockerfile: Dockerfile.workspace-executor
+    profiles: ["workforce-executor"]
+    restart: unless-stopped
+    environment:
+      WORKSPACE_EXECUTOR_HOST: 0.0.0.0
+      WORKSPACE_EXECUTOR_PORT: 8100
+      WORKSPACE_EXECUTOR_TOKEN: ${WORKSPACE_EXECUTOR_TOKEN:-}
+      WORKSPACE_EXECUTOR_ALLOWED_HOSTS: workspace-executor:8100
+      WORKSPACE_APPROVAL_VERIFICATION_KEY_FILE: /run/buzz/jwt-public.pem
+      WORKSPACE_APPROVAL_AUDIENCE: ${BUZZ_WORKSPACE_APPROVAL_AUDIENCE:-workspace-executor}
+      WORKSPACE_REPOS_FILE: /config/workforce-repos.json
+      WORKSPACE_ROOT: /workspaces
+      WORKSPACE_HOST_ROOT: ${WORKFORCE_WORKSPACE_ROOT:-${PWD}/tmp/workforce-workspaces}
+    volumes:
+      - ${WORKFORCE_SOURCE_ROOT:-.}:/workspace-sources/agentos-railway:rw
+      - ${DEVICE_FARM_SOURCE_ROOT:-../device-farm}:/workspace-sources/device-farm:rw
+      - ${WORKFORCE_REPOS_FILE:-./config/workforce-repos.example.json}:/config/workforce-repos.json:ro
+      - ${BUZZ_JWT_PUBLIC_KEY_FILE:-../agno/secrets/buzz-jwt-public.pem}:/run/buzz/jwt-public.pem:ro
+      - ${WORKFORCE_WORKSPACE_ROOT:-${PWD}/tmp/workforce-workspaces}:/workspaces
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - agentos
+
+  buzz-adapter:
+    image: ${IMAGE_NAME:-agentos}:${IMAGE_TAG:-latest}
+    profiles: ["buzz"]
+    entrypoint: []
+    command: ["uvicorn", "services.buzz_adapter.server:app", "--host", "0.0.0.0", "--port", "8200"]
+    restart: unless-stopped
+    ports:
+      - "8200:8200"
+    environment:
+      BUZZ_AGENTOS_URL: http://agentos-api:8000
+      BUZZ_IDENTITIES_FILE: /run/buzz/identities.json
+      BUZZ_TOKEN_PEPPER: ${BUZZ_TOKEN_PEPPER:-}
+      BUZZ_JWT_PRIVATE_KEY_FILE: /run/buzz/jwt-private.pem
+      BUZZ_JWT_AUDIENCE: ${BUZZ_JWT_AUDIENCE:-agentos}
+      BUZZ_WORKSPACE_APPROVAL_AUDIENCE: ${BUZZ_WORKSPACE_APPROVAL_AUDIENCE:-workspace-executor}
+    volumes:
+      - ${BUZZ_IDENTITIES_FILE:-../agno/secrets/buzz-identities.json}:/run/buzz/identities.json:ro
+      - ${BUZZ_JWT_PRIVATE_KEY_FILE:-../agno/secrets/buzz-jwt-private.pem}:/run/buzz/jwt-private.pem:ro
+    depends_on:
+      - agentos-api
+    networks:
+      - agentos
+
+networks:
+  agentos:
+
+volumes:
+  pgdata:

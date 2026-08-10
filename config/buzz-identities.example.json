@@ -1,0 +1,7 @@
+[
+  {
+    "subject": "buzz:replace-with-user-id",
+    "token_hash": "replace-with-hmac-sha256-token-hash",
+    "active": false
+  }
+]

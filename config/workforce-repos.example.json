@@ -1,0 +1,56 @@
+{
+  "repos": {
+    "agentos-railway": {
+      "source_path": "/workspace-sources/agentos-railway",
+      "sandbox_image": "agentos:latest",
+      "write_policy": "trusted",
+      "checks": {
+        "unit-isolated": {
+          "argv": [
+            "python",
+            "-m",
+            "unittest",
+            "tests.test_buzz_adapter",
+            "tests.test_buzz_auth",
+            "tests.test_capabilities",
+            "tests.test_engineering_workflow",
+            "tests.test_executor",
+            "tests.test_knowledge_config",
+            "tests.test_learning_contract",
+            "tests.test_model_probe",
+            "tests.test_prompt_provenance",
+            "tests.test_research_workflow",
+            "tests.test_workforce_contracts",
+            "tests.test_workspace_binding",
+            "tests.test_workforce_delegation",
+            "-v"
+          ],
+          "timeout_seconds": 120
+        },
+        "sandbox-boundary": {
+          "argv": [
+            "python",
+            "-m",
+            "services.workspace_executor.sandbox_probe"
+          ],
+          "timeout_seconds": 30
+        }
+      }
+    },
+    "device-farm": {
+      "source_path": "/workspace-sources/device-farm",
+      "sandbox_image": "agentos:latest",
+      "write_policy": "approval_required",
+      "checks": {
+        "repository-structure": {
+          "argv": [
+            "python",
+            "-c",
+            "from pathlib import Path; required=('AGENTS.md','device_farm','agent-boot'); missing=[p for p in required if not Path(p).exists()]; assert not missing, missing"
+          ],
+          "timeout_seconds": 30
+        }
+      }
+    }
+  }
+}

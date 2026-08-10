@@ -1,0 +1,73 @@
+manifest:
+  # --- Agents ---
+
+  chief:
+    description: "The team mascot. Tell Chief anything (decisions, what you learned, what you had for lunch)."
+    quick_prompts:
+      - "What's up chief?"
+      - "Hey Chief, we're getting zapatos from garaje"
+      - "Chief, we're going with planetscale over RDS"
+
+  agent-builder:
+    description: "Creates agents, teams, and workflows using the AgentOS Studio."
+    quick_prompts:
+      - "Build an agent like chief but sassier"
+      - "Build an agent that tracks AI news and writes a daily brief"
+      - "Build a multi-agent team with the chief and platform manager"
+
+  platform-manager:
+    description: "Understands, monitors, and explains this AgentOS. Codebase context, runtime diagnostics, usage patterns."
+    quick_prompts:
+      - "Tell me about this AgentOS"
+      - "Share some usage patterns"
+      - "Which agent is slowest, and is anything failing?"
+
+  # --- Teams ---
+
+  workforce-router:
+    description: "Routes work to the minimum set of domain teams and applies the quality policy after a draft exists."
+    quick_prompts:
+      - "Audit this repository and fix confirmed issues"
+      - "Research competitors, find keywords, and propose a landing page"
+
+  engineering-team:
+    description: "Coordinates private code, test, review, security, architecture, database, performance, and SRE specialists."
+    quick_prompts:
+      - "Review this repository for correctness and security risks"
+
+  growth-team:
+    description: "Coordinates SEO, marketing, content, analytics, market research, and competitor specialists."
+    quick_prompts:
+      - "Find the highest-value content gaps for this product"
+
+  research-team:
+    description: "Coordinates iterative search, source verification, and evidence-grounded synthesis."
+    quick_prompts:
+      - "Research this question and cross-check every material claim"
+
+  # --- Workflows ---
+
+  deployment-check:
+    description: "Run a deployment check to verify the AgentOS is running correctly."
+    quick_prompts:
+      - "Run the deployment check"
+
+  run-evals:
+    description: "Run a subset of the eval suite."
+    quick_prompts:
+      - "Run the smoke evals"
+
+  engineering-delivery:
+    description: "Deterministic implement or audit pipeline over an allowlisted disposable repository workspace."
+    quick_prompts:
+      - "Implement a focused change and validate it independently"
+
+  research-pipeline:
+    description: "Iterative research pipeline that verifies sources before synthesis."
+    quick_prompts:
+      - "Research a technical decision with source verification"
+
+  continuous-learning:
+    description: "Extract, independently verify, deduplicate, and promote reusable principles from workforce runs."
+    quick_prompts:
+      - "Review recent workforce runs and promote only verified reusable learnings"
