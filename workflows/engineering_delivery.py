@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from os import getenv
 from typing import Any
 
 from agno.workflow.step import Step, StepInput, StepOutput
@@ -23,7 +24,6 @@ from workforce.contracts import (
 from workforce.runtime_tools import review_with_quality_council
 from workforce.verdicts import terminal_verdict
 
-MAX_FIX_LOOPS = 2
 logger = logging.getLogger(__name__)
 
 
@@ -42,7 +42,8 @@ def _task(step_input: StepInput) -> EngineeringTaskInput:
 
 
 async def _ask(agent: Any, prompt: str) -> str:
-    result = await agent.arun(prompt, stream=False)
+    timeout = float(getenv("WORKFORCE_AGENT_CALL_TIMEOUT_SECONDS", "150"))
+    result = await asyncio.wait_for(agent.arun(prompt, stream=False), timeout=timeout)
     return result.get_content_as_string()
 
 
@@ -121,7 +122,7 @@ async def engineering_delivery_step(step_input: StepInput) -> StepOutput:
         async with WorkspaceExecutorClient() as client:
             workspace_id = await client.create_workspace(task.repo_id)
             context = (
-                f"Workspace id: {workspace_id}\nTask: {task.task}\n"
+                f"Workspace id: {workspace_id}\nExecution mode: {task.execution_mode}\nTask: {task.task}\n"
                 f"Acceptance criteria: {list(task.acceptance_criteria)}"
             )
 
@@ -190,7 +191,7 @@ async def engineering_delivery_step(step_input: StepInput) -> StepOutput:
                 latest_reviews.append(quality_review)
             if task.apply_fixes and _reviews_require_fix(latest_reviews, checks):
                 delegated_to.append("fixer-agent")
-                for _iteration in range(MAX_FIX_LOOPS):
+                for _iteration in range(task.max_fix_loops):
                     await _ask(
                         fixer_agent,
                         context
@@ -229,24 +230,68 @@ async def engineering_delivery_step(step_input: StepInput) -> StepOutput:
                         break
 
             blocked = _reviews_require_fix(latest_reviews, checks)
+            publish_result: dict[str, Any] | None = None
+            publish_error: str | None = None
+            if not blocked:
+                try:
+                    await client.grant_publish(workspace_id, "VERDICT: PASS")
+                    publish_result = await client.publish_changes(workspace_id)
+                except RuntimeError as exc:
+                    publish_error = str(exc)
+                except PermissionError as exc:
+                    publish_error = str(exc)
             outcome = WorkforceOutcome(
-                status=OutcomeStatus.BLOCKED if blocked else OutcomeStatus.COMPLETED,
+                status=(
+                    OutcomeStatus.BLOCKED
+                    if blocked
+                    else OutcomeStatus.NEEDS_INPUT
+                    if publish_error and "human approval" in publish_error.lower()
+                    else OutcomeStatus.FAILED
+                    if publish_error
+                    else OutcomeStatus.COMPLETED
+                ),
                 summary=(
                     "Engineering delivery has unresolved findings; fixes were not requested."
                     if blocked and not task.apply_fixes
-                    else "Engineering delivery stopped after the maximum fix loops."
+                    else f"Engineering delivery stopped after {task.max_fix_loops} fix loop(s)."
                     if blocked
-                    else "Engineering delivery completed with independent test and review evidence."
+                    else "Engineering delivery requires human approval before publishing this repository."
+                    if publish_error and "human approval" in publish_error.lower()
+                    else f"Engineering delivery could not publish the validated diff: {publish_error}"
+                    if publish_error
+                    else "Engineering delivery completed, passed independent gates, and published source changes."
                 ),
                 delegated_to=tuple(dict.fromkeys(delegated_to)),
-                artifacts=(Artifact(kind="diff", name="workspace.diff", content=final_diff),),
+                artifacts=(
+                    Artifact(kind="diff", name="workspace.diff", content=final_diff),
+                    Artifact(
+                        kind="publish",
+                        name="publish_result.json",
+                        content=json.dumps(publish_result or {"error": publish_error}, ensure_ascii=True),
+                    ),
+                ),
                 checks=tuple(
-                    f"{check.get('check_id')}:{'PASS' if check.get('success') else 'FAIL'}" for check in checks
+                    [
+                        *(f"{check.get('check_id')}:{'PASS' if check.get('success') else 'FAIL'}" for check in checks),
+                        *(
+                            ("publish:NEEDS_APPROVAL",)
+                            if publish_error and "human approval" in publish_error.lower()
+                            else ("publish:FAIL",)
+                            if publish_error
+                            else ("publish:PASS",)
+                        ),
+                    ]
                 ),
                 findings=tuple(findings),
+                approvals_required=("source_publish",)
+                if publish_error and "human approval" in publish_error.lower()
+                else (),
                 degraded_capabilities=capabilities.degraded,
             )
-            return StepOutput(content=outcome.model_dump(mode="json"), success=not blocked)
+            return StepOutput(
+                content=outcome.model_dump(mode="json"),
+                success=outcome.status == OutcomeStatus.COMPLETED,
+            )
     except Exception:
         logger.exception("Engineering delivery failed")
         outcome = WorkforceOutcome(

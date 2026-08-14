@@ -59,8 +59,9 @@ def _register(
 def register_schedules() -> None:
     """Register schedules (idempotent and fail-soft).
 
-    The deployment check runs daily by default. Run-evals is registered but
-    disabled because it uses model calls. Turn it on from the AgentOS UI.
+    The deployment check and continuous-learning run daily by default.
+    Run-evals is registered but disabled because it uses model calls. Turn it
+    on from the AgentOS UI.
     """
     if getenv("ENABLE_SCHEDULED_EVALS") is not None:
         log_warning(
@@ -104,5 +105,4 @@ def register_schedules() -> None:
         endpoint="/workflows/continuous-learning/runs",
         payload={"message": "Review recent workforce runs for verified reusable learning."},
         description="Daily: verify and promote reusable operating principles from workforce runs.",
-        enabled=False,
     )

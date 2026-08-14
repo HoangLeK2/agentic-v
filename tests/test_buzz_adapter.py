@@ -1,13 +1,27 @@
+import asyncio
 import shlex
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 from fastapi.testclient import TestClient
 
 from services.buzz_adapter.auth import BuzzIdentity
 from services.buzz_adapter.client import extract_content, parse_sse_event, present_content
-from services.buzz_adapter.models import ChatCompletionRequest, extract_buzz_event, render_messages
-from services.buzz_adapter.server import _pending_approvals, _session_id, app
+from services.buzz_adapter.models import ChatCompletionRequest, extract_buzz_event, latest_user_message, render_messages
+from services.buzz_adapter.server import (
+    _buzz_event_dedupe,
+    _buzz_event_results,
+    _buzz_event_tasks,
+    _log_buzz_reply,
+    _pending_approvals,
+    _session_id,
+    app,
+)
+from services.buzz_adapter.settings import BuzzAdapterSettings
 
 CHANNEL_ID = "39624acb-09ba-4806-8751-e72bd8f38edf"
 EVENT_ID = "e9c04169169d8371a22df0adb7b30b509cf5d3f4e3d3814a016e52e8464d25a5"
@@ -31,6 +45,12 @@ def buzz_event_prompt(content: str, *, kind: int = 9) -> str:
 
 
 class BuzzAdapterTest(TestCase):
+    def setUp(self) -> None:
+        _buzz_event_dedupe.clear()
+        _buzz_event_results.clear()
+        _buzz_event_tasks.clear()
+        _pending_approvals.clear()
+
     def test_renders_openai_messages_with_roles(self) -> None:
         request = ChatCompletionRequest(
             model="buzz-agent",
@@ -41,6 +61,59 @@ class BuzzAdapterTest(TestCase):
         )
 
         self.assertEqual(render_messages(request.messages), "[system]\nBe precise\n\n[user]\nReview this")
+
+    def test_buzz_settings_default_to_long_coding_timeout(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "BUZZ_IDENTITIES_FILE": "/tmp/buzz-identities.json",
+                "BUZZ_TOKEN_PEPPER": "pepper",
+                "BUZZ_JWT_PRIVATE_KEY_FILE": "/tmp/buzz-jwt-private.pem",
+            },
+            clear=True,
+        ):
+            settings = BuzzAdapterSettings.from_env()
+
+        self.assertEqual(settings.request_timeout_seconds, 900)
+        self.assertEqual(settings.agentos_run_timeout_seconds, 3600)
+        self.assertEqual(settings.event_dedupe_seconds, 3900)
+
+    def test_buzz_dedupe_outlives_custom_request_timeout(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "BUZZ_IDENTITIES_FILE": "/tmp/buzz-identities.json",
+                "BUZZ_TOKEN_PEPPER": "pepper",
+                "BUZZ_JWT_PRIVATE_KEY_FILE": "/tmp/buzz-jwt-private.pem",
+                "BUZZ_REQUEST_TIMEOUT_SECONDS": "1200",
+                "BUZZ_EVENT_DEDUPE_SECONDS": "60",
+            },
+            clear=True,
+        ):
+            settings = BuzzAdapterSettings.from_env()
+
+        self.assertEqual(settings.request_timeout_seconds, 1200)
+        self.assertEqual(settings.agentos_run_timeout_seconds, 3600)
+        self.assertEqual(settings.event_dedupe_seconds, 3900)
+
+    def test_buzz_background_timeout_can_exceed_bridge_timeout(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "BUZZ_IDENTITIES_FILE": "/tmp/buzz-identities.json",
+                "BUZZ_TOKEN_PEPPER": "pepper",
+                "BUZZ_JWT_PRIVATE_KEY_FILE": "/tmp/buzz-jwt-private.pem",
+                "BUZZ_REQUEST_TIMEOUT_SECONDS": "900",
+                "BUZZ_AGENTOS_RUN_TIMEOUT_SECONDS": "5400",
+                "BUZZ_EVENT_DEDUPE_SECONDS": "60",
+            },
+            clear=True,
+        ):
+            settings = BuzzAdapterSettings.from_env()
+
+        self.assertEqual(settings.request_timeout_seconds, 900)
+        self.assertEqual(settings.agentos_run_timeout_seconds, 5400)
+        self.assertEqual(settings.event_dedupe_seconds, 5700)
 
     def test_extracts_team_run_content(self) -> None:
         self.assertEqual(extract_content({"content": "done", "run_id": "run-1"}), "done")
@@ -130,6 +203,39 @@ class BuzzAdapterTest(TestCase):
         self.assertEqual(event.kind, 20002)
         self.assertEqual(event.content, "")
 
+    def test_latest_user_message_avoids_replaying_upstream_history(self) -> None:
+        request = ChatCompletionRequest.model_validate(
+            {
+                "model": "buzz-agent",
+                "messages": [
+                    {"role": "user", "content": "old question"},
+                    {"role": "assistant", "content": "old answer"},
+                    {"role": "user", "content": "new question"},
+                ],
+            }
+        )
+
+        self.assertEqual(latest_user_message(request.messages), "new question")
+
+    def test_logs_buzz_reply_preview_when_enabled(self) -> None:
+        event = extract_buzz_event([{"role": "user", "content": buzz_event_prompt("Review auth")}])
+        self.assertIsNotNone(event)
+        assert event is not None
+        runtime = MagicMock()
+        runtime.settings = SimpleNamespace(log_reply_preview=True, reply_preview_chars=11)
+
+        with (
+            patch("services.buzz_adapter.server.runtime", return_value=runtime),
+            self.assertLogs("uvicorn.error", level="INFO") as logs,
+        ):
+            _log_buzz_reply(event, "hello\nworld with more text", delivery="tool_call")
+
+        line = logs.output[0]
+        self.assertIn("delivery=tool_call", line)
+        self.assertIn(f"channel={CHANNEL_ID}", line)
+        self.assertIn("chars=26", line)
+        self.assertIn("preview=hello\\nworld...[truncated]", line)
+
     def test_chat_completion_authenticates_user_and_calls_only_virtual_model(self) -> None:
         runtime = MagicMock()
         runtime.identities.get.return_value.authenticate.return_value = BuzzIdentity(
@@ -190,6 +296,139 @@ class BuzzAdapterTest(TestCase):
             runtime.client.run.await_args.kwargs["session_id"],
             _session_id("buzz:alice", CHANNEL_ID),
         )
+
+    def test_duplicate_buzz_event_is_suppressed_without_agentos_call(self) -> None:
+        runtime = MagicMock()
+        runtime.identities.get.return_value.authenticate.return_value = BuzzIdentity(
+            subject="buzz:alice", token_hash="unused"
+        )
+        runtime.issuer.issue.return_value = "scoped-jwt"
+        runtime.settings.event_dedupe_seconds = 900
+        runtime.client.run = AsyncMock()
+        _buzz_event_dedupe[("buzz:alice", EVENT_ID)] = 9_999_999_999.0
+
+        with (
+            patch("services.buzz_adapter.server.runtime", return_value=runtime),
+            self.assertLogs("uvicorn.error", level="INFO") as logs,
+        ):
+            response = TestClient(app).post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer user-token"},
+                json={
+                    "model": "buzz-agent",
+                    "messages": [{"role": "user", "content": buzz_event_prompt("Review auth")}],
+                    "tools": [
+                        {
+                            "type": "function",
+                            "function": {"name": "buzz-dev-mcp__shell", "parameters": {"type": "object"}},
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        choice = response.json()["choices"][0]
+        self.assertEqual(choice["message"]["content"], "")
+        self.assertNotIn("tool_calls", choice["message"])
+        runtime.client.run.assert_not_awaited()
+        self.assertIn("Buzz duplicate event suppressed", logs.output[0])
+
+    def test_duplicate_buzz_event_joins_inflight_run_without_starting_another_job(self) -> None:
+        runtime = MagicMock()
+        runtime.identities.get.return_value.authenticate.return_value = BuzzIdentity(
+            subject="buzz:alice", token_hash="unused"
+        )
+        runtime.issuer.issue.return_value = "scoped-jwt"
+        runtime.settings.event_dedupe_seconds = 900
+        runtime.settings.log_reply_preview = False
+        started = threading.Event()
+
+        async def slow_run(**_kwargs):
+            started.set()
+            await asyncio.sleep(0.2)
+            return {"content": "joined result"}
+
+        runtime.client.run = AsyncMock(side_effect=slow_run)
+        request = {
+            "model": "buzz-agent",
+            "messages": [{"role": "user", "content": buzz_event_prompt("Implement a large feature")}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "buzz-dev-mcp__shell", "parameters": {"type": "object"}},
+                }
+            ],
+        }
+
+        def post_event():
+            return TestClient(app).post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer user-token"},
+                json=request,
+            )
+
+        with (
+            patch("services.buzz_adapter.server.runtime", return_value=runtime),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            first_future = executor.submit(post_event)
+            self.assertTrue(started.wait(timeout=2))
+            second_future = executor.submit(post_event)
+            responses = [first_future.result(timeout=5), second_future.result(timeout=5)]
+
+        self.assertEqual(runtime.client.run.await_count, 1)
+        self.assertTrue(all(response.status_code == 200 for response in responses))
+        choices = [response.json()["choices"][0] for response in responses]
+        tool_call_choices = [choice for choice in choices if choice["finish_reason"] == "tool_calls"]
+        empty_choices = [choice for choice in choices if choice["message"].get("content") == ""]
+        self.assertEqual(len(tool_call_choices), 1)
+        self.assertEqual(len(empty_choices), 1)
+        arguments = __import__("json").loads(
+            tool_call_choices[0]["message"]["tool_calls"][0]["function"]["arguments"]
+        )
+        self.assertIn("joined result", arguments["command"])
+
+    def test_buzz_event_timeout_returns_notice_and_keeps_dedupe(self) -> None:
+        runtime = MagicMock()
+        runtime.identities.get.return_value.authenticate.return_value = BuzzIdentity(
+            subject="buzz:alice", token_hash="unused"
+        )
+        runtime.issuer.issue.return_value = "scoped-jwt"
+        runtime.settings.event_dedupe_seconds = 900
+        runtime.settings.request_timeout_seconds = 120
+        runtime.settings.log_reply_preview = False
+        runtime.client.run = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
+        request = {
+            "model": "buzz-agent",
+            "messages": [{"role": "user", "content": buzz_event_prompt("Implement a large feature")}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "buzz-dev-mcp__shell", "parameters": {"type": "object"}},
+                }
+            ],
+        }
+
+        with patch("services.buzz_adapter.server.runtime", return_value=runtime):
+            first = TestClient(app).post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer user-token"},
+                json=request,
+            )
+            second = TestClient(app).post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer user-token"},
+                json=request,
+            )
+
+        self.assertEqual(first.status_code, 200)
+        first_choice = first.json()["choices"][0]
+        self.assertEqual(first_choice["finish_reason"], "tool_calls")
+        arguments = __import__("json").loads(first_choice["message"]["tool_calls"][0]["function"]["arguments"])
+        self.assertIn("chạy quá 120s", arguments["command"])
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["choices"][0]["message"]["content"], "")
+        runtime.client.run.assert_awaited_once()
 
     def test_buzz_confirmation_continues_paused_apply_patch_run(self) -> None:
         runtime = MagicMock()

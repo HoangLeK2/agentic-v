@@ -88,3 +88,12 @@ def render_messages(messages: list[ChatMessage]) -> str:
     if len(prompt) > 250_000:
         raise ValueError("Conversation exceeds the adapter input limit")
     return prompt
+
+
+def latest_user_message(messages: list[ChatMessage]) -> str:
+    for message in reversed(messages):
+        if message.role == "user":
+            content = _text_content(message).strip()
+            if content:
+                return content
+    raise ValueError("Conversation has no non-empty user message")

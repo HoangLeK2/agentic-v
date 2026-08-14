@@ -52,5 +52,11 @@ class WorkspaceExecutorClient:
     async def git_diff(self, workspace_id: str) -> str:
         return await self.call("git_diff", workspace_id=workspace_id)
 
+    async def grant_publish(self, workspace_id: str, verdict: str) -> dict:
+        return await self.call("grant_publish", workspace_id=workspace_id, verdict=verdict)
+
+    async def publish_changes(self, workspace_id: str) -> dict:
+        return await self.call("publish_changes", workspace_id=workspace_id)
+
     async def close_workspace(self, workspace_id: str) -> None:
         await self.call("close_workspace", workspace_id=workspace_id)

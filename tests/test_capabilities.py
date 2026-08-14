@@ -98,3 +98,46 @@ class CapabilityRegistryTest(TestCase):
             assert capability is not None
             self.assertEqual(capability.status, CapabilityStatus.UNAVAILABLE)
             self.assertIn("not implemented", capability.reason or "")
+
+    def test_engineering_prefix_alias_lists_write_capable_code_operations(self) -> None:
+        registry = CapabilityRegistry(
+            [
+                OperationCapability(
+                    id="code.read",
+                    status=CapabilityStatus.AVAILABLE,
+                    provider="workspace-executor",
+                    permissions=("read",),
+                ),
+                OperationCapability(
+                    id="code.sandbox_write",
+                    status=CapabilityStatus.AVAILABLE,
+                    provider="workspace-executor",
+                    permissions=("sandbox_write",),
+                ),
+                OperationCapability(
+                    id="code.run_checks",
+                    status=CapabilityStatus.AVAILABLE,
+                    provider="workspace-executor",
+                    permissions=("read",),
+                ),
+                OperationCapability(
+                    id="security.static_review",
+                    status=CapabilityStatus.AVAILABLE,
+                    provider="workspace-executor",
+                    permissions=("read",),
+                ),
+                OperationCapability(
+                    id="research.web_search",
+                    status=CapabilityStatus.DEGRADED,
+                    provider="parallel",
+                    permissions=("read",),
+                ),
+            ]
+        )
+
+        operations = {item.id for item in registry.list("engineering")}
+
+        self.assertEqual(
+            operations,
+            {"code.read", "code.sandbox_write", "code.run_checks", "security.static_review"},
+        )

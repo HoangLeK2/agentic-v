@@ -2,7 +2,7 @@
 
 from agno.team.mode import TeamMode
 
-from agents.workforce.common import lead_learning, specialist
+from agents.workforce.common import lead_learning, specialist, workforce_session_summary_manager
 from agents.workforce.prompt_provenance import grounded_team_instructions
 from app.registry import get_parallel_tools
 from app.settings import ModelRole, model_for
@@ -102,6 +102,9 @@ growth_team = DomainBoundaryTeam(
         competitor_agent,
     ],
     tools=[list_operation_capabilities, propose_learning_candidate, review_with_quality_council],
+    enable_session_summaries=True,
+    session_summary_manager=workforce_session_summary_manager(),
+    add_session_summary_to_context=True,
     instructions=grounded_team_instructions(
         "growth-team",
         [
@@ -115,8 +118,7 @@ growth_team = DomainBoundaryTeam(
         ],
     ),
     add_datetime_to_context=True,
-    add_history_to_context=True,
-    num_history_runs=5,
+    add_history_to_context=False,
     show_members_responses=True,
     markdown=True,
 )

@@ -2,7 +2,7 @@
 
 from agno.team.mode import TeamMode
 
-from agents.workforce.common import lead_learning, specialist, workspace_tools
+from agents.workforce.common import lead_learning, specialist, workforce_session_summary_manager, workspace_tools
 from agents.workforce.prompt_provenance import grounded_team_instructions
 from app.settings import ModelRole, model_for
 from db import get_postgres_db
@@ -38,7 +38,8 @@ engineering_lead = specialist(
         "diff and grant only an exact VERDICT: PASS. Publish only after both gates pass; approval_required patches "
         "must also carry the user's confirmation for the current diff. A trusted repository never pauses for user "
         "implementation: continue through patch, checks, review, and publish. Then "
-        "close the workspace. Never pass a repo_id as workspace_id or bypass the declared policy."
+        "close the workspace. The write-capable operation is code.sandbox_write; do not look for a separate "
+        "engineering.* write operation. Never pass a repo_id as workspace_id or bypass the declared policy."
     ),
     model_role=ModelRole.ENGINEERING,
     tools=workspace_tools(*LEAD_WORKSPACE_TOOLS),
@@ -174,12 +175,21 @@ engineering_team = DomainBoundaryTeam(
         run_engineering_delivery,
         propose_learning_candidate,
     ],
+    enable_session_summaries=True,
+    session_summary_manager=workforce_session_summary_manager(),
+    add_session_summary_to_context=True,
     instructions=grounded_team_instructions(
         "engineering-team",
         [
             "Delegate only the members required for the request; never broadcast to every member.",
             "For an internal project audit, treat repository evidence as authoritative and set apply_fixes=true unless "
             "the user explicitly asks for read-only findings.",
+            "For a feature request or bug fix in an allowlisted repository, call run_engineering_delivery with "
+            "intent=implement, apply_fixes=true, and execution_mode='standard' before considering direct specialist "
+            "delegation. Use execution_mode='fast' for tiny safe edits and execution_mode='deep' only for large "
+            "features, security-sensitive rewrites, or explicit deep work.",
+            "Engineering write readiness is code.sandbox_write plus the repository write_policy returned by "
+            "open_repository. Do not require a nonexistent engineering.* operation.",
             "Any confirmed fixable defect is an implementation request: delegate to Engineering Lead with the exact "
             "repo_id so the change can be published, even when the defect was discovered during an audit. The lead "
             "opens the workspace and coordinates its write_policy: trusted writes proceed; approval_required writes "
@@ -188,14 +198,14 @@ engineering_team = DomainBoundaryTeam(
             "and Engineering Lead publishes only after both server-side gates pass.",
             "Fail closed when a required operation is unavailable.",
             "Never hand the user code-editing or command-running steps that assigned tools can perform. Continue "
-            "autonomously until published, or report the exact capability, approval, or failed quality gate blocking it.",
+            "autonomously until published, or report the exact capability, approval, or failed quality gate "
+            "blocking it.",
             "Return the engineering artifact and preserve workflow status and evidence. "
             "The public router normalizes the final outcome.",
         ],
     ),
     add_datetime_to_context=True,
-    add_history_to_context=True,
-    num_history_runs=5,
+    add_history_to_context=False,
     show_members_responses=True,
     markdown=True,
 )

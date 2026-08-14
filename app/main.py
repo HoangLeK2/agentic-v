@@ -22,8 +22,8 @@ from agents.workforce.router import workforce_router
 from app.registry import registry
 from app.schedules import register_schedules
 from db import get_postgres_db
-from workflows.deployment_check import deployment_check
 from workflows.continuous_learning import continuous_learning
+from workflows.deployment_check import deployment_check
 from workflows.engineering_delivery import engineering_delivery
 from workflows.research_pipeline import research_pipeline
 from workflows.run_evals import run_evals

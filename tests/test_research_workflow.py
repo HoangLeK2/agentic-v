@@ -29,7 +29,9 @@ class ResearchWorkflowTest(IsolatedAsyncioTestCase):
             patch("workflows.research_pipeline.capability_registry.evaluate", return_value=capability),
             patch("workflows.research_pipeline._ask", new=AsyncMock(side_effect=ask)) as ask_mock,
         ):
-            output = await research_pipeline_step(StepInput(input={"question": "Is the claim true?"}))
+            output = await research_pipeline_step(
+                StepInput(input={"question": "Is the claim true?", "execution_mode": "standard"})
+            )
 
         self.assertFalse(output.success)
         assert isinstance(output.content, dict)
@@ -37,6 +39,33 @@ class ResearchWorkflowTest(IsolatedAsyncioTestCase):
         self.assertEqual(
             [call.args[0] for call in ask_mock.await_args_list],
             [search_agent, web_research_agent, source_verifier, synthesis_agent],
+        )
+
+    async def test_fast_research_skips_independent_verifier(self) -> None:
+        capability = CapabilityEvaluation(CapabilityStatus.AVAILABLE, ("research.web_search",), (), ())
+
+        async def ask(agent, _prompt):
+            if agent is search_agent:
+                return "https://primary.example/source"
+            if agent is web_research_agent:
+                return "Source-backed evidence"
+            if agent is synthesis_agent:
+                return "Fast sourced answer"
+            raise AssertionError(f"unexpected agent: {agent.id}")
+
+        with (
+            patch("workflows.research_pipeline.capability_registry.evaluate", return_value=capability),
+            patch("workflows.research_pipeline._ask", new=AsyncMock(side_effect=ask)) as ask_mock,
+        ):
+            output = await research_pipeline_step(StepInput(input={"question": "Quick current-web question"}))
+
+        self.assertTrue(output.success)
+        assert isinstance(output.content, dict)
+        self.assertEqual(output.content["status"], OutcomeStatus.COMPLETED)
+        self.assertEqual(output.content["delegated_to"], ["search-agent", "web-research-agent", "synthesis-agent"])
+        self.assertEqual(
+            [call.args[0] for call in ask_mock.await_args_list],
+            [search_agent, web_research_agent, synthesis_agent],
         )
 
     async def test_unavailable_search_fails_before_any_model_call(self) -> None:
@@ -51,7 +80,9 @@ class ResearchWorkflowTest(IsolatedAsyncioTestCase):
             patch("workflows.research_pipeline.capability_registry.evaluate", return_value=capability),
             patch("workflows.research_pipeline._ask", new=AsyncMock()) as ask_mock,
         ):
-            output = await research_pipeline_step(StepInput(input={"question": "Research this"}))
+            output = await research_pipeline_step(
+                StepInput(input={"question": "Research this", "execution_mode": "standard"})
+            )
 
         self.assertFalse(output.success)
         assert isinstance(output.content, dict)
@@ -76,7 +107,9 @@ class ResearchWorkflowTest(IsolatedAsyncioTestCase):
             patch("workflows.research_pipeline.capability_registry.evaluate", return_value=capability),
             patch("workflows.research_pipeline._ask", new=AsyncMock(side_effect=ask)),
         ):
-            output = await research_pipeline_step(StepInput(input={"question": "Research this"}))
+            output = await research_pipeline_step(
+                StepInput(input={"question": "Research this", "execution_mode": "standard"})
+            )
 
         self.assertFalse(output.success)
         assert isinstance(output.content, dict)
@@ -100,7 +133,9 @@ class ResearchWorkflowTest(IsolatedAsyncioTestCase):
             patch("workflows.research_pipeline.capability_registry.evaluate", return_value=capability),
             patch("workflows.research_pipeline._ask", new=AsyncMock(side_effect=ask)),
         ):
-            output = await research_pipeline_step(StepInput(input={"question": "Research this"}))
+            output = await research_pipeline_step(
+                StepInput(input={"question": "Research this", "execution_mode": "standard"})
+            )
 
         self.assertFalse(output.success)
         assert isinstance(output.content, dict)

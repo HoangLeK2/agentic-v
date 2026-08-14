@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from os import getenv
 
+ENGINEERING_CAPABILITY_PREFIXES = ("code.", "security.")
+
 
 class CapabilityStatus(StrEnum):
     AVAILABLE = "available"
@@ -48,7 +50,10 @@ class CapabilityRegistry:
     def list(self, prefix: str | None = None) -> tuple[OperationCapability, ...]:
         capabilities: Iterable[OperationCapability] = self._capabilities.values()
         if prefix:
-            capabilities = (item for item in capabilities if item.id.startswith(prefix))
+            normalized_prefixes = _normalize_prefix(prefix)
+            capabilities = (
+                item for item in capabilities if any(item.id.startswith(candidate) for candidate in normalized_prefixes)
+            )
         return tuple(sorted(capabilities, key=lambda item: item.id))
 
     def evaluate(self, operation_ids: Iterable[str]) -> CapabilityEvaluation:
@@ -83,6 +88,13 @@ class CapabilityRegistry:
 
 def _configured(*names: str) -> bool:
     return all(bool(getenv(name)) for name in names)
+
+
+def _normalize_prefix(prefix: str) -> tuple[str, ...]:
+    normalized = prefix.strip().casefold()
+    if normalized in {"engineering", "engineering.", "engineering.operation", "engineering.operations"}:
+        return ENGINEERING_CAPABILITY_PREFIXES
+    return (normalized,)
 
 
 def build_capability_registry() -> CapabilityRegistry:

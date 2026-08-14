@@ -18,6 +18,7 @@ from workforce.contracts import OutcomeStatus
 
 class FakeExecutorClient:
     closed: list[str] = []
+    published: list[str] = []
 
     async def __aenter__(self):
         return self
@@ -37,13 +38,28 @@ class FakeExecutorClient:
     async def git_diff(self, _workspace_id: str) -> str:
         return "diff --git a/a.py b/a.py\n"
 
+    async def grant_publish(self, workspace_id: str, verdict: str) -> dict:
+        if verdict != "VERDICT: PASS":
+            raise ValueError("bad verdict")
+        return {"granted": True, "workspace_id": workspace_id}
+
+    async def publish_changes(self, workspace_id: str) -> dict:
+        self.published.append(workspace_id)
+        return {"published": True, "repo_id": "agentos", "diff": "diff --git a/a.py b/a.py\n"}
+
     async def close_workspace(self, workspace_id: str) -> None:
         self.closed.append(workspace_id)
+
+
+class ApprovalRequiredFakeExecutorClient(FakeExecutorClient):
+    async def publish_changes(self, workspace_id: str) -> dict:
+        raise PermissionError("Publishing this repository requires human approval for the current diff")
 
 
 class EngineeringWorkflowTest(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         FakeExecutorClient.closed.clear()
+        FakeExecutorClient.published.clear()
 
     async def test_implement_uses_code_then_independent_test_and_review(self) -> None:
         capability = CapabilityEvaluation(CapabilityStatus.AVAILABLE, ("code.read",), (), ())
@@ -72,6 +88,7 @@ class EngineeringWorkflowTest(IsolatedAsyncioTestCase):
         self.assertEqual(
             [call.args[0] for call in ask_mock.await_args_list], [code_agent, tester_agent, reviewer_agent]
         )
+        self.assertEqual(FakeExecutorClient.published, ["workspace-1"])
         self.assertEqual(FakeExecutorClient.closed, ["workspace-1"])
 
     async def test_read_only_audit_skips_code_and_fixer(self) -> None:
@@ -126,6 +143,32 @@ class EngineeringWorkflowTest(IsolatedAsyncioTestCase):
         self.assertFalse(output.success)
         assert isinstance(output.content, dict)
         self.assertEqual(output.content["status"], OutcomeStatus.BLOCKED)
+
+    async def test_approval_required_publish_returns_needs_input(self) -> None:
+        capability = CapabilityEvaluation(CapabilityStatus.AVAILABLE, ("code.read",), (), ())
+
+        async def ask(agent, _prompt):
+            if agent is code_agent:
+                return "implemented"
+            if agent is tester_agent:
+                return "tests pass"
+            if agent is reviewer_agent:
+                return "VERDICT: PASS"
+            raise AssertionError(f"unexpected agent: {agent.id}")
+
+        with (
+            patch("workflows.engineering_delivery.capability_registry.evaluate", return_value=capability),
+            patch("workflows.engineering_delivery.WorkspaceExecutorClient", ApprovalRequiredFakeExecutorClient),
+            patch("workflows.engineering_delivery._ask", new=AsyncMock(side_effect=ask)),
+        ):
+            output = await engineering_delivery_step(
+                StepInput(input={"repo_id": "device-farm", "task": "Implement parser", "intent": "implement"})
+            )
+
+        self.assertFalse(output.success)
+        assert isinstance(output.content, dict)
+        self.assertEqual(output.content["status"], OutcomeStatus.NEEDS_INPUT)
+        self.assertEqual(output.content["approvals_required"], ["source_publish"])
 
     async def test_conflicting_reviewer_verdicts_fail_closed(self) -> None:
         capability = CapabilityEvaluation(CapabilityStatus.AVAILABLE, ("code.read",), (), ())

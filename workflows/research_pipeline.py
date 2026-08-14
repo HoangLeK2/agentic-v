@@ -1,7 +1,9 @@
 """Deterministic long-horizon research pipeline."""
 
+import asyncio
 import json
 import logging
+from os import getenv
 
 from agno.workflow.step import Step, StepInput, StepOutput
 from agno.workflow.workflow import Workflow
@@ -9,7 +11,7 @@ from agno.workflow.workflow import Workflow
 from agents.workforce.research import search_agent, source_verifier, synthesis_agent, web_research_agent
 from db import get_postgres_db
 from workforce.capabilities import CapabilityStatus, capability_registry
-from workforce.contracts import OutcomeStatus, QualityLevel, ResearchTaskInput, WorkforceOutcome
+from workforce.contracts import ExecutionMode, OutcomeStatus, QualityLevel, ResearchTaskInput, WorkforceOutcome
 from workforce.runtime_tools import review_with_quality_council
 from workforce.verdicts import terminal_verdict
 
@@ -31,7 +33,8 @@ def _task(step_input: StepInput) -> ResearchTaskInput:
 
 
 async def _ask(agent, prompt: str) -> str:
-    result = await agent.arun(prompt, stream=False)
+    timeout = float(getenv("WORKFORCE_AGENT_CALL_TIMEOUT_SECONDS", "150"))
+    result = await asyncio.wait_for(agent.arun(prompt, stream=False), timeout=timeout)
     return result.get_content_as_string()
 
 
@@ -54,22 +57,30 @@ async def research_pipeline_step(step_input: StepInput) -> StepOutput:
         search_plan = await _ask(
             search_agent,
             f"Question: {task.question}\nRun up to {task.max_search_rounds} query rounds. "
-            "Return deduplicated URLs and why each matters.",
+            f"Return at most {task.max_sources} deduplicated URLs and why each matters.",
         )
         evidence = await _ask(
             web_research_agent,
-            f"Question: {task.question}\nRead and compare the sources discovered below. Preserve URLs and dates.\n"
+            f"Question: {task.question}\nRead at most {task.max_sources} sources discovered below. "
+            "Preserve URLs and dates. Prefer primary/current sources and ignore low-value duplicates.\n"
             f"{search_plan}",
         )
-        verification = await _ask(
-            source_verifier,
-            f"Question: {task.question}\nVerify every material claim against these sources. "
-            f"State VERDICT: PASS or VERDICT: INSUFFICIENT_EVIDENCE.\n{evidence}",
-        )
-        verified = _passed(verification)
+        needs_verifier = task.execution_mode != ExecutionMode.FAST or task.quality != QualityLevel.AUTO
+        if needs_verifier:
+            verification = await _ask(
+                source_verifier,
+                f"Question: {task.question}\nVerify every material claim against these sources. "
+                f"State VERDICT: PASS or VERDICT: INSUFFICIENT_EVIDENCE.\n{evidence}",
+            )
+            verified = _passed(verification)
+        else:
+            verification = "Fast mode used source-backed synthesis without an independent verifier pass.\nVERDICT: PASS"
+            verified = True
         synthesis = await _ask(
             synthesis_agent,
-            f"Question: {task.question}\nSynthesize only verified claims, with source links near claims.\n"
+            f"Question: {task.question}\n"
+            "Synthesize source-backed claims concisely, with source links near claims. "
+            "State important uncertainty instead of adding another research round.\n"
             f"EVIDENCE:\n{evidence}\nVERIFICATION:\n{verification}",
         )
         findings = [verification]
@@ -103,7 +114,11 @@ async def research_pipeline_step(step_input: StepInput) -> StepOutput:
             else OutcomeStatus.COMPLETED
         ),
         summary=synthesis,
-        delegated_to=("search-agent", "web-research-agent", "source-verifier", "synthesis-agent"),
+        delegated_to=(
+            ("search-agent", "web-research-agent", "source-verifier", "synthesis-agent")
+            if needs_verifier
+            else ("search-agent", "web-research-agent", "synthesis-agent")
+        ),
         findings=tuple(findings),
         degraded_capabilities=capabilities.degraded,
     )

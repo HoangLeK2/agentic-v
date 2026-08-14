@@ -123,11 +123,24 @@ class AgentOSRouterClient:
         self.base_url = base_url
         self.timeout = httpx.Timeout(timeout_seconds, connect=10)
 
-    async def run(self, *, prompt: str, token: str, subject: str, session_id: str | None = None) -> dict:
+    def _timeout(self, timeout_seconds: float | None = None) -> httpx.Timeout:
+        if timeout_seconds is None:
+            return self.timeout
+        return httpx.Timeout(timeout_seconds, connect=10)
+
+    async def run(
+        self,
+        *,
+        prompt: str,
+        token: str,
+        subject: str,
+        session_id: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> dict:
         data = {"message": prompt, "stream": "false", "user_id": subject}
         if session_id:
             data["session_id"] = session_id
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self._timeout(timeout_seconds)) as client:
             response = await client.post(
                 f"{self.base_url}/teams/workforce-router/runs",
                 data=data,

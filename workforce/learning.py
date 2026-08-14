@@ -1,7 +1,7 @@
 """Candidate-level learning review and explicit promotion."""
 
-import json
 import hashlib
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from os import getenv
@@ -41,7 +41,9 @@ def _ensure_table(conn) -> None:
     )
     conn.execute(text(f"ALTER TABLE {_table()} ADD COLUMN IF NOT EXISTS promotion_started_at timestamptz"))
     conn.execute(text(f"ALTER TABLE {_table()} ADD COLUMN IF NOT EXISTS fingerprint varchar(64)"))
-    conn.execute(text(f"CREATE UNIQUE INDEX IF NOT EXISTS workforce_learning_fingerprint_idx ON {_table()} (fingerprint)"))
+    conn.execute(
+        text(f"CREATE UNIQUE INDEX IF NOT EXISTS workforce_learning_fingerprint_idx ON {_table()} (fingerprint)")
+    )
 
 
 def propose_learning_candidate(

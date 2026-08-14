@@ -37,7 +37,8 @@ services:
         required: false
     environment:
       RUNTIME_ENV: dev
-      AGNO_DEBUG: "True"
+      AGNO_DEBUG: ${AGNO_DEBUG:-True}
+      CONTINUOUS_LEARNING_MAX_RUNS: ${CONTINUOUS_LEARNING_MAX_RUNS:-3}
       WAIT_FOR_DB: "True"
       AGENTOS_URL: http://127.0.0.1:8000
       OPENAI_BASE_URL: http://host.docker.internal:20128/v1
@@ -96,6 +97,11 @@ services:
       BUZZ_JWT_PRIVATE_KEY_FILE: /run/buzz/jwt-private.pem
       BUZZ_JWT_AUDIENCE: ${BUZZ_JWT_AUDIENCE:-agentos}
       BUZZ_WORKSPACE_APPROVAL_AUDIENCE: ${BUZZ_WORKSPACE_APPROVAL_AUDIENCE:-workspace-executor}
+      BUZZ_REQUEST_TIMEOUT_SECONDS: ${BUZZ_REQUEST_TIMEOUT_SECONDS:-900}
+      BUZZ_AGENTOS_RUN_TIMEOUT_SECONDS: ${BUZZ_AGENTOS_RUN_TIMEOUT_SECONDS:-3600}
+      BUZZ_LOG_REPLY_PREVIEW: ${BUZZ_LOG_REPLY_PREVIEW:-True}
+      BUZZ_REPLY_PREVIEW_CHARS: ${BUZZ_REPLY_PREVIEW_CHARS:-800}
+      BUZZ_EVENT_DEDUPE_SECONDS: ${BUZZ_EVENT_DEDUPE_SECONDS:-3900}
     volumes:
       - ${BUZZ_IDENTITIES_FILE:-../agno/secrets/buzz-identities.json}:/run/buzz/identities.json:ro
       - ${BUZZ_JWT_PRIVATE_KEY_FILE:-../agno/secrets/buzz-jwt-private.pem}:/run/buzz/jwt-private.pem:ro

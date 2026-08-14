@@ -40,7 +40,8 @@ def model_for(role: ModelRole | str) -> OpenAIChat:
         model_id = getenv(env_name) or getenv("OPENAI_MODEL_ID") or _MODEL_DEFAULTS[resolved_role]
     else:
         model_id = getenv(env_name) or _MODEL_DEFAULTS[resolved_role]
-    return OpenAIChat(id=model_id, base_url=getenv("OPENAI_BASE_URL") or None)
+    timeout = float(getenv("WORKFORCE_MODEL_TIMEOUT_SECONDS", "120"))
+    return OpenAIChat(id=model_id, base_url=getenv("OPENAI_BASE_URL") or None, timeout=timeout)
 
 
 def default_model() -> OpenAIChat:

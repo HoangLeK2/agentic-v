@@ -2,7 +2,7 @@
 
 from agno.team.mode import TeamMode
 
-from agents.workforce.common import lead_learning, specialist
+from agents.workforce.common import lead_learning, specialist, workforce_session_summary_manager
 from agents.workforce.prompt_provenance import grounded_team_instructions
 from app.registry import get_parallel_tools
 from app.settings import ModelRole, model_for
@@ -72,19 +72,23 @@ research_team = DomainBoundaryTeam(
     db=get_postgres_db(),
     members=[research_lead, search_agent, web_research_agent, source_verifier, synthesis_agent],
     tools=[list_operation_capabilities, run_research_pipeline, propose_learning_candidate],
+    enable_session_summaries=True,
+    session_summary_manager=workforce_session_summary_manager(),
+    add_session_summary_to_context=True,
     instructions=grounded_team_instructions(
         "research-team",
         [
             "Delegate only the research stages the request needs.",
-            "Use research-pipeline for long-horizon or evidence-sensitive tasks.",
-            "Material factual claims require Source Verifier before final synthesis.",
+            "Default to fast research: run_research_pipeline(execution_mode='fast', max_sources=3) for ordinary "
+            "current-web questions.",
+            "Use execution_mode='standard' when material factual claims need independent Source Verifier. "
+            "Use execution_mode='deep' only when the user explicitly asks for deep research or broad comparison.",
             "Return the requested research artifact with its sources and clearly preserve "
             "insufficient_evidence status when support is missing. The public router normalizes the final outcome.",
         ],
     ),
     add_datetime_to_context=True,
-    add_history_to_context=True,
-    num_history_runs=5,
+    add_history_to_context=False,
     show_members_responses=True,
     markdown=True,
 )
